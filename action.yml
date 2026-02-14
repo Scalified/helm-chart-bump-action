@@ -1,0 +1,149 @@
+name: "scalified/helm-chart-bump-action"
+description: "Bumps Helm chart"
+author: "Scalified"
+branding:
+  icon: "refresh-cw"
+  color: "black"
+
+inputs:
+  dockerhub-namespace:
+    description: "Docker Hub namespace (organization or user)"
+    required: true
+  dockerhub-repository:
+    description: "Docker Hub repository name"
+    required: true
+  docker-image-tag-pattern:
+    description: "Regex pattern to match Docker image tags (default: semantic versioning)"
+    required: false
+    default: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
+  chart-file-path:
+    description: "Path to the Helm chart's Chart.yaml file (relative to the repository root)"
+    required: true
+
+outputs:
+  latest-version:
+    description: "The latest version found in Docker Hub matching the specified pattern"
+    value: ${{ steps.determine-latest-version.outputs.latest-version }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: checkout
+      name: Checkout repository
+      uses: actions/checkout@v4
+
+    - id: determine-latest-version
+      name: Determine latest version
+      env:
+        DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub-namespace }}
+        DOCKERHUB_REPOSITORY: ${{ inputs.dockerhub-repository }}
+        DOCKER_IMAGE_TAG_PATTERN: ${{ inputs.docker-image-tag-pattern }}
+      shell: bash
+      run: |
+        # Determine latest version
+
+        echo "::group::🔧 Build Docker Hub API URL (${DOCKERHUB_NAMESPACE}/${DOCKERHUB_REPOSITORY})"
+        DOCKERHUB_API_URL="https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/"\
+        "repositories/${DOCKERHUB_REPOSITORY}/tags?page_size=100&"\
+        "ordering=last_updated"
+        echo "ℹ️ DOCKERHUB_API_URL: ${DOCKERHUB_API_URL}"
+        echo "::endgroup::"
+
+        echo "::group::📥 Fetch tags from Docker Hub (${DOCKERHUB_NAMESPACE}/${DOCKERHUB_REPOSITORY})"
+        tags_response="$(curl -fsSL "${DOCKERHUB_API_URL}")"
+        tags_count="$(jq -r '.count' <<< "${tags_response}")"
+        echo "✅ Retrieved ${tags_count} tags for ${DOCKERHUB_NAMESPACE}/${DOCKERHUB_REPOSITORY}"
+        echo "::endgroup::"
+
+        echo "::group::🔎 Find the latest tag matching the version pattern"
+        latest_tag_info="$(
+          jq -r --arg pattern "${DOCKER_IMAGE_TAG_PATTERN}" '
+            .results
+            | map(select(.name | test($pattern)))
+            | sort_by(.name)
+            | last // {}
+            | {
+                name: (.name // empty),
+                last_updated: (.last_updated // empty)
+              }
+          ' <<< "${tags_response}"
+        )"
+        latest_tag="$(jq -r '.name // empty' <<< "${latest_tag_info}")"
+        latest_tag_date="$(jq -r '.last_updated // empty' <<< "${latest_tag_info}")"
+
+        if [[ -z "${latest_tag}" ]]; then
+          echo "⚠️ No image tags matched pattern: ${DOCKER_IMAGE_TAG_PATTERN}"
+        else
+          echo "✅ Latest matching tag: ${latest_tag} (${latest_tag_date})"
+          echo "latest-version=${latest_tag}" >> "${GITHUB_OUTPUT}"
+        fi
+        echo "::endgroup::"
+
+    - id: update-chart-version
+      name: Update Chart version
+      env:
+        CHART_FILE_PATH: ${{ inputs.chart-file-path }}
+      shell: bash
+      if: ${{ steps.determine-latest-version.outputs.latest-version != '' }}
+      run: |
+        # Update Chart version
+        if [[ ! -f "${CHART_FILE_PATH}" ]]; then
+          echo "::error::❌ Chart file was not found: ${CHART_FILE_PATH}"
+          exit 1
+        fi
+
+        echo "::group::📖 Read current Chart version"
+        current_chart_version="$(
+          sed -n -E 's/^version:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' "${CHART_FILE_PATH}" | head -n 1
+        )"
+        if [[ -z "${current_chart_version}" ]]; then
+          echo "::error::❌ Failed to read Chart version from ${CHART_FILE_PATH}"
+          echo "::endgroup::"
+          exit 1
+        fi
+        echo "ℹ️ Current Chart version: ${current_chart_version}"
+        echo "::endgroup::"
+
+        echo "::group::⚖️ Compare versions"
+        latest_version="${{ steps.determine-latest-version.outputs.latest-version }}"
+        if [[ "${current_chart_version}" == "${latest_version}" ]]; then
+          echo "✅ No update needed. Chart version is already up to date"
+          echo "::endgroup::"
+          exit 0
+        else
+          echo "🔁 Version mismatch: chart = ${current_chart_version}, latest = ${latest_version}"
+        fi
+        echo "::endgroup::"
+
+        echo "::group::✍️ Update Chart version in ${CHART_FILE_PATH}"
+        sed -i -E "s|^version:[[:space:]].*$|version: ${latest_version}|" "${CHART_FILE_PATH}"
+        sed -i -E "s|^appVersion:[[:space:]].*$|appVersion: \"${latest_version}\"|" "${CHART_FILE_PATH}"
+        echo "✅ Updated Chart version in ${CHART_FILE_PATH} to ${latest_version}"
+        echo "::endgroup::"
+
+    - id: commit-and-push
+      name: Commit and push Chart changes
+      env:
+        CHART_FILE_PATH: ${{ inputs.chart-file-path }}
+      if: ${{ steps.determine-latest-version.outputs.latest-version != '' }}
+      shell: bash
+      run: |
+        # Commit and push Chart changes
+        if git diff --quiet -- "${CHART_FILE_PATH}"; then
+          echo "ℹ️ No changes to commit in ${CHART_FILE_PATH}"
+          exit 0
+        fi
+
+        echo "::group::🧾 Commit Chart changes"
+        latest_version="${{ steps.determine-latest-version.outputs.latest-version }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "${CHART_FILE_PATH}"
+        git commit -m "chore(chart): bump chart to ${latest_version}"
+        echo "✅ Committed changes for ${CHART_FILE_PATH}"
+        echo "::endgroup::"
+
+        echo "::group::🚀 Push changes"
+        git push origin "HEAD:${GITHUB_REF_NAME}"
+        echo "✅ Pushed commit to ${GITHUB_REF_NAME}"
+        echo "::endgroup::"
