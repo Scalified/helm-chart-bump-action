@@ -6,9 +6,14 @@ branding:
   color: "black"
 
 inputs:
+  token:
+    description: "GitHub token with permissions to push changes"
+    default: "${{ github.token }}"
+    required: false
   dockerhub-namespace:
     description: "Docker Hub namespace (organization or user)"
-    required: true
+    default: "library"
+    required: false
   dockerhub-repository:
     description: "Docker Hub repository name"
     required: true
@@ -21,9 +26,9 @@ inputs:
     required: true
 
 outputs:
-  latest-version:
+  latest-app-version:
     description: "The latest version found in Docker Hub matching the specified pattern"
-    value: ${{ steps.determine-latest-version.outputs.latest-version }}
+    value: ${{ steps.determine-latest-app-version.outputs.latest-app-version }}
 
 runs:
   using: "composite"
@@ -31,16 +36,19 @@ runs:
     - id: checkout
       name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.token }}
+        fetch-depth: 0
 
-    - id: determine-latest-version
-      name: Determine latest version
+    - id: determine-latest-app-version
+      name: Determine latest app version
       env:
         DOCKERHUB_NAMESPACE: ${{ inputs.dockerhub-namespace }}
         DOCKERHUB_REPOSITORY: ${{ inputs.dockerhub-repository }}
         DOCKER_IMAGE_TAG_PATTERN: ${{ inputs.docker-image-tag-pattern }}
       shell: bash
       run: |
-        # Determine latest version
+        # Determine latest app version
 
         echo "::group::🔧 Build Docker Hub API URL (${DOCKERHUB_NAMESPACE}/${DOCKERHUB_REPOSITORY})"
         DOCKERHUB_API_URL="https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/"\
@@ -74,8 +82,17 @@ runs:
         if [[ -z "${latest_tag}" ]]; then
           echo "⚠️ No image tags matched pattern: ${DOCKER_IMAGE_TAG_PATTERN}"
         else
-          echo "✅ Latest matching tag: ${latest_tag} (${latest_tag_date})"
-          echo "latest-version=${latest_tag}" >> "${GITHUB_OUTPUT}"
+          latest_app_version="${latest_tag#v}"
+          if [[ "${latest_app_version}" =~ ^([0-9]+)$ ]]; then
+            latest_app_version="${latest_app_version}.0.0"
+            echo "⚠️ Version ${latest_tag} looks like a major version. Normalized to ${latest_app_version}"
+          fi
+          if [[ "${latest_app_version}" =~ ^([0-9]+\.[0-9]+)$ ]]; then
+            latest_app_version="${latest_app_version}.0"
+            echo "⚠️ Version ${latest_tag} looks like a major.minor version. Normalized to ${latest_app_version}"
+          fi
+          echo "✅ Latest app version: ${latest_app_version} (${latest_tag_date})"
+          echo "latest-app-version=${latest_app_version}" >> "${GITHUB_OUTPUT}"
         fi
         echo "::endgroup::"
 
@@ -84,7 +101,7 @@ runs:
       env:
         CHART_FILE_PATH: ${{ inputs.chart-file-path }}
       shell: bash
-      if: ${{ steps.determine-latest-version.outputs.latest-version != '' }}
+      if: ${{ steps.determine-latest-app-version.outputs.latest-app-version != '' }}
       run: |
         # Update Chart version
         if [[ ! -f "${CHART_FILE_PATH}" ]]; then
@@ -93,39 +110,48 @@ runs:
         fi
 
         echo "::group::📖 Read current Chart version"
-        current_chart_version="$(
-          sed -n -E 's/^version:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' "${CHART_FILE_PATH}" | head -n 1
+        chart_app_version="$(
+          sed -n -E 's/^appVersion:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' "${CHART_FILE_PATH}" | head -n 1
         )"
-        if [[ -z "${current_chart_version}" ]]; then
-          echo "::error::❌ Failed to read Chart version from ${CHART_FILE_PATH}"
+        if [[ -z "${chart_app_version}" ]]; then
+          echo "::error::❌ Failed to read Chart app version from ${CHART_FILE_PATH}"
           echo "::endgroup::"
           exit 1
         fi
-        echo "ℹ️ Current Chart version: ${current_chart_version}"
+        echo "ℹ️ Current Chart app version: ${chart_app_version}"
         echo "::endgroup::"
 
         echo "::group::⚖️ Compare versions"
-        latest_version="${{ steps.determine-latest-version.outputs.latest-version }}"
-        if [[ "${current_chart_version}" == "${latest_version}" ]]; then
-          echo "✅ No update needed. Chart version is already up to date"
+        latest_app_version="${{ steps.determine-latest-app-version.outputs.latest-app-version }}"
+        if [[ "${chart_app_version}" == "${latest_app_version}" ]]; then
+          echo "✅ No update needed. Chart app version is already up to date"
           echo "::endgroup::"
           exit 0
         else
-          echo "🔁 Version mismatch: chart = ${current_chart_version}, latest = ${latest_version}"
+          echo "🔁 Version mismatch: chart = ${chart_app_version}, latest = ${latest_app_version}"
         fi
         echo "::endgroup::"
 
         echo "::group::✍️ Update Chart version in ${CHART_FILE_PATH}"
+        semver_regex='(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'\
+        '(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'\
+        '(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
+        latest_version=$(echo "${latest_app_version}" | grep -oP "${semver_regex}")
+        if [[ -z "${latest_version}" ]]; then
+          echo "::error::❌ Can't extract semantic version from '${latest_app_version}'"
+          echo "::endgroup::"
+          exit 1
+        fi
         sed -i -E "s|^version:[[:space:]].*$|version: ${latest_version}|" "${CHART_FILE_PATH}"
-        sed -i -E "s|^appVersion:[[:space:]].*$|appVersion: \"${latest_version}\"|" "${CHART_FILE_PATH}"
-        echo "✅ Updated Chart version in ${CHART_FILE_PATH} to ${latest_version}"
+        sed -i -E "s|^appVersion:[[:space:]].*$|appVersion: \"${latest_app_version}\"|" "${CHART_FILE_PATH}"
+        echo "✅ Updated Chart version in ${CHART_FILE_PATH} to ${latest_app_version}"
         echo "::endgroup::"
 
     - id: commit-and-push
       name: Commit and push Chart changes
       env:
         CHART_FILE_PATH: ${{ inputs.chart-file-path }}
-      if: ${{ steps.determine-latest-version.outputs.latest-version != '' }}
+      if: ${{ steps.determine-latest-app-version.outputs.latest-app-version != '' }}
       shell: bash
       run: |
         # Commit and push Chart changes
@@ -135,11 +161,11 @@ runs:
         fi
 
         echo "::group::🧾 Commit Chart changes"
-        latest_version="${{ steps.determine-latest-version.outputs.latest-version }}"
+        latest_app_version="${{ steps.determine-latest-app-version.outputs.latest-app-version }}"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git add "${CHART_FILE_PATH}"
-        git commit -m "chore(chart): bump chart to ${latest_version}"
+        git commit -m "chore(chart): bump chart to ${latest_app_version}"
         echo "✅ Committed changes for ${CHART_FILE_PATH}"
         echo "::endgroup::"
 

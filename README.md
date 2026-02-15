@@ -32,6 +32,7 @@ jobs:
       - name: Bump chart
         uses: Scalified/helm-chart-bump-action@v1
         with:
+          token: ${{ secrets.TOKEN }}
           dockerhub-namespace: your-org
           dockerhub-repository: your-image
           docker-image-tag-pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
@@ -40,18 +41,19 @@ jobs:
 
 ## Inputs
 
-| Input                      | Description                                                   | Required | Default                  |
-|----------------------------|---------------------------------------------------------------|----------|--------------------------|
-| `dockerhub-namespace`      | Docker Hub namespace (organization or user)                   | Yes      |                          |
-| `dockerhub-repository`     | Docker Hub repository name                                    | Yes      |                          |
-| `docker-image-tag-pattern` | Regex pattern used to match tags                              | No       | Semantic version pattern |
-| `chart-file-path`          | Path to Helm chart `Chart.yaml` (relative to repository root) | Yes      |                          |
+| Input                      | Description                                                   | Required | Default                |
+|----------------------------|---------------------------------------------------------------|----------|------------------------|
+| `token`                    | GitHub token with permissions to push changes                 | No       | `${GITHUB_TOKEN}`      |
+| `dockerhub-namespace`      | Docker Hub namespace (organization or user)                   | No       | `library`              |
+| `dockerhub-repository`     | Docker Hub repository name                                    | Yes      |                        |
+| `docker-image-tag-pattern` | Regex pattern used to match tags                              | No       | SemVer version pattern |
+| `chart-file-path`          | Path to Helm chart `Chart.yaml` (relative to repository root) | Yes      |                        |
 
 ## Outputs
 
 | Output           | Description                                                     |
 |------------------|-----------------------------------------------------------------|
-| `latest-version` | The latest Docker image tag matching `docker-image-tag-pattern` |
+| `latest-app-version` | The latest Docker image tag matching `docker-image-tag-pattern` |
 
 ---
 
