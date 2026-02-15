@@ -8,7 +8,8 @@ branding:
 inputs:
   dockerhub-namespace:
     description: "Docker Hub namespace (organization or user)"
-    required: true
+    default: "library"
+    required: false
   dockerhub-repository:
     description: "Docker Hub repository name"
     required: true

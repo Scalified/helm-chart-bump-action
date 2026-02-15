@@ -42,7 +42,7 @@ jobs:
 
 | Input                      | Description                                                   | Required | Default                  |
 |----------------------------|---------------------------------------------------------------|----------|--------------------------|
-| `dockerhub-namespace`      | Docker Hub namespace (organization or user)                   | Yes      |                          |
+| `dockerhub-namespace`      | Docker Hub namespace (organization or user)                   | No       | `library`                |
 | `dockerhub-repository`     | Docker Hub repository name                                    | Yes      |                          |
 | `docker-image-tag-pattern` | Regex pattern used to match tags                              | No       | Semantic version pattern |
 | `chart-file-path`          | Path to Helm chart `Chart.yaml` (relative to repository root) | Yes      |                          |
