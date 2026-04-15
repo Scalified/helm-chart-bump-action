@@ -143,7 +143,8 @@ runs:
         semver_regex='(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'\
         '(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'\
         '(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
-        if [[ -z "$(echo "${chart_version_latest}" | grep -oP "${semver_regex}")" ]]; then
+        chart_version_latest=$(echo "${chart_version_latest}" | grep -oP "${semver_regex}" || true)
+        if [[ -z "${chart_version_latest}" ]]; then
             echo "::error::❌ Can't generate semantic version for '${latest_tag}' image tag"
             echo "::endgroup::"
             exit 1
